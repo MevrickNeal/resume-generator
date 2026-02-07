@@ -1,0 +1,89 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[empty]{fullpage}
+\usepackage{geometry}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{fontawesome} % For icons
+
+% Adjust margins
+\geometry{left=1cm, right=1cm, top=1cm, bottom=1cm}
+
+% Define colors
+\definecolor{darkblue}{RGB}{0,0,139}
+
+% Custom commands
+\newcommand{\sectionheader}[1]{
+    \vspace{-5pt}
+    \section*{#1}
+    \vspace{-5pt}
+    \hrule
+    \vspace{5pt}
+}
+
+\begin{document}
+
+% --- HEADER WITH PHOTO ---
+\begin{minipage}[t]{0.75\textwidth}
+    \vspace{10pt}
+    {\Huge \textbf{\VAR{name}}} \\
+    \vspace{5pt}
+    {\Large \VAR{title}} \\
+    \vspace{5pt}
+    \faEnvelope \ \VAR{email} \quad \faPhone \ \VAR{phone} \\
+    \faLinkedin \ \href{\VAR{linkedin}}{LinkedIn} \quad \faGithub \ \href{\VAR{portfolio}}{Portfolio}
+\end{minipage}
+\begin{minipage}[t]{0.20\textwidth}
+    \vspace{-15pt}
+    \begin{flushright}
+        % Check if photo exists, otherwise use a placeholder
+        \includegraphics[width=3cm, height=3.5cm, keepaspectratio]{\VAR{photo_path}}
+    \end{flushright}
+\end{minipage}
+
+\vspace{10pt}
+
+% --- SUMMARY ---
+\sectionheader{Professional Summary}
+\VAR{summary}
+
+% --- SKILLS ---
+\sectionheader{Technical Skills}
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Languages/Core:} \VAR{skills_hard}
+    \item \textbf{Tools/Frameworks:} \VAR{skills_tools}
+    \item \textbf{Soft Skills:} \VAR{skills_soft}
+\end{itemize}
+
+% --- EXPERIENCE ---
+\sectionheader{Experience}
+\BLOCK{for job in experience}
+    \noindent \textbf{\VAR{job.role}} \hfill \VAR{job.dates} \\
+    \textit{\VAR{job.company}} \\
+    \vspace{-5pt}
+    \begin{itemize}[noitemsep, leftmargin=*]
+        \BLOCK{for bullet in job.bullets}
+        \item \VAR{bullet}
+        \BLOCK{endfor}
+    \end{itemize}
+    \vspace{5pt}
+\BLOCK{endfor}
+
+% --- EDUCATION ---
+\sectionheader{Education}
+\BLOCK{for edu in education}
+    \noindent \textbf{\VAR{edu.degree}} \hfill \VAR{edu.year} \\
+    \textit{\VAR{edu.institution}} \hfill CGPA: \VAR{edu.grade} \\
+    \vspace{2pt}
+\BLOCK{endfor}
+
+% --- PROJECTS ---
+\sectionheader{Key Projects}
+\BLOCK{for proj in projects}
+    \noindent \textbf{\VAR{proj.name}}: \VAR{proj.description} \\
+\BLOCK{endfor}
+
+\end{document}

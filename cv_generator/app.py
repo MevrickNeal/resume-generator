@@ -3,15 +3,13 @@ import fitz  # PyMuPDF
 import os
 import subprocess
 import json
+import re  # Added for regex cleaning
 import google.generativeai as genai
 from jinja2 import Environment, FileSystemLoader
-from pathlib import Path
 
 # --- CONFIGURATION ---
 TEMPLATE_FILE = "cv_template.tex"
 BUILD_DIR = "build"
-
-# Ensure build directory exists
 os.makedirs(BUILD_DIR, exist_ok=True)
 
 # --- JINJA2 SETUP ---
@@ -23,139 +21,124 @@ env = Environment(
     variable_end_string='}',
     comment_start_string='\#{',
     comment_end_string='}',
-    line_statement_prefix='%%',
-    line_comment_prefix='%#',
     trim_blocks=True,
     autoescape=False,
 )
 
-# --- FUNCTIONS ---
-def extract_text_from_pdf(uploaded_file):
-    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+def clean_json_string(json_str):
+    """
+    Cleans the AI response to ensure it's valid JSON.
+    Removes markdown code blocks (```json ... ```).
+    """
+    # Remove ```json and ``` at the start/end
+    cleaned = re.sub(r'^```json\s*', '', json_str, flags=re.MULTILINE)
+    cleaned = re.sub(r'^```\s*', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'\s*```$', '', cleaned, flags=re.MULTILINE)
+    return cleaned.strip()
 
 def get_ai_data(api_key, raw_text):
-    """
-    Sends the raw text to Gemini and gets structured JSON back.
-    """
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    You are an expert HR assistant. Extract the resume details from the text below 
-    and format them into this exact JSON structure. 
-    Summarize descriptions to fit a 1-page CV.
+    Act as a professional resume writer. Extract data from the text below and return strict JSON.
+    Do not use Markdown formatting. Do not include ```json fences. Just return the raw JSON object.
     
-    JSON Structure required:
+    JSON Structure:
     {{
-        "name": "...",
-        "title": "...",
-        "email": "...",
-        "phone": "...",
-        "linkedin": "...",
-        "portfolio": "...",
-        "summary": "...",
-        "skills_hard": "...",
-        "skills_tools": "...",
-        "skills_soft": "...",
-        "experience": [
-            {{ "role": "...", "company": "...", "dates": "...", "bullets": ["...", "..."] }}
-        ],
-        "education": [
-            {{ "degree": "...", "institution": "...", "year": "...", "grade": "..." }}
-        ],
-        "projects": [
-            {{ "name": "...", "description": "..." }}
-        ]
+        "name": "Full Name",
+        "title": "Current Job Title",
+        "email": "Email",
+        "phone": "Phone",
+        "linkedin": "LinkedIn URL",
+        "portfolio": "Portfolio URL",
+        "summary": "Professional summary (max 300 chars)",
+        "skills_hard": "List of hard skills",
+        "skills_tools": "List of tools",
+        "skills_soft": "List of soft skills",
+        "experience": [ {{ "role": "...", "company": "...", "dates": "...", "bullets": ["...", "..."] }} ],
+        "education": [ {{ "degree": "...", "institution": "...", "year": "...", "grade": "..." }} ],
+        "projects": [ {{ "name": "...", "description": "..." }} ]
     }}
 
     RAW TEXT:
     {raw_text}
     """
-    
     response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-    return json.loads(response.text)
+    
+    # DEBUG: Print what AI sent back to the logs
+    print("AI RESPONSE RAW:", response.text)
+    
+    try:
+        return json.loads(clean_json_string(response.text))
+    except json.JSONDecodeError as e:
+        st.error(f"JSON Error: The AI return invalid data. Raw data: {response.text}")
+        raise e
 
 def compile_latex(data, photo_filename):
-    # 1. Update data with the correct photo path for LaTeX
-    # LaTeX needs absolute paths or paths relative to execution. 
-    # Since we run pdflatex in the root, 'build/photo.jpg' works if passed correctly.
-    data['photo_path'] = photo_filename
+    # Logic: Tell LaTeX if we have a photo or not
+    if photo_filename and os.path.exists(os.path.join(BUILD_DIR, photo_filename)):
+        data['show_photo'] = True
+        data['photo_path'] = photo_filename
+    else:
+        data['show_photo'] = False
+        data['photo_path'] = ""
 
-    # 2. Render Template
     template = env.get_template(TEMPLATE_FILE)
     latex_content = template.render(data)
 
-    # 3. Save .tex file
     tex_path = os.path.join(BUILD_DIR, "resume.tex")
     with open(tex_path, "w") as f:
         f.write(latex_content)
 
-    # 4. Compile PDF
-    # We run it twice to ensure layout is correct
     try:
-        subprocess.run(["pdflatex", "-output-directory", BUILD_DIR, tex_path], check=True)
-    except subprocess.CalledProcessError as e:
-        st.error("LaTeX Compilation Failed! Check the logs.")
+        # Run pdflatex
+        cmd = ["pdflatex", "-output-directory", BUILD_DIR, "-interaction=nonstopmode", tex_path]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            st.error("LaTeX Error Log:")
+            st.text(result.stdout[-1000:]) # Show last 1000 chars of log
+            st.error(result.stderr)
+            return None
+            
+    except FileNotFoundError:
+        st.error("CRITICAL ERROR: 'pdflatex' not found. Did you add packages.txt?")
         return None
 
     return os.path.join(BUILD_DIR, "resume.pdf")
 
-# --- APP UI ---
-st.set_page_config(page_title="One-Page CV Generator", layout="wide")
+# --- UI ---
+st.set_page_config(page_title="AI CV Generator")
+st.title("📄 Instant CV Standardizer (Debug Mode)")
 
-st.title("📄 AI Resume Standardizer")
-st.markdown("Upload a raw CV + Photo, and get a perfect 1-page PDF back.")
-
-# Sidebar for API Key
 api_key = st.sidebar.text_input("Gemini API Key", type="password")
-if not api_key:
-    st.sidebar.warning("Please enter your API Key to proceed.")
 
-col1, col2 = st.columns(2)
+uploaded_cv = st.file_uploader("Upload CV (PDF)", type=["pdf"])
+uploaded_photo = st.file_uploader("Upload Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
 
-with col1:
-    st.subheader("1. Upload")
-    uploaded_cv = st.file_uploader("Upload Current CV (PDF)", type=["pdf"])
-    uploaded_photo = st.file_uploader("Upload Photo (JPG/PNG)", type=["jpg", "jpeg", "png"])
-
-if uploaded_cv and uploaded_photo and api_key:
-    if st.button("Generate One-Page CV"):
-        with st.spinner("Analyzing text with AI..."):
-            # 1. Extract Text
-            raw_text = extract_text_from_pdf(uploaded_cv)
+if st.button("Generate CV") and uploaded_cv and api_key:
+    with st.spinner("Processing..."):
+        # 1. Extract Text
+        doc = fitz.open(stream=uploaded_cv.read(), filetype="pdf")
+        text = "".join([page.get_text() for page in doc])
+        
+        # 2. AI
+        try:
+            cv_data = get_ai_data(api_key, text)
+        except Exception as e:
+            st.stop()
             
-            # 2. Get JSON from AI
-            try:
-                cv_data = get_ai_data(api_key, raw_text)
-                st.success("Analysis Complete!")
-            except Exception as e:
-                st.error(f"AI Error: {e}")
-                st.stop()
-
-            # 3. Save Photo for LaTeX
-            photo_path = os.path.join(BUILD_DIR, "user_photo.jpg")
-            with open(photo_path, "wb") as f:
+        # 3. Photo
+        photo_name = None
+        if uploaded_photo:
+            photo_name = "user_photo.jpg"
+            with open(os.path.join(BUILD_DIR, photo_name), "wb") as f:
                 f.write(uploaded_photo.getbuffer())
 
-            # 4. Compile
-            with st.spinner("Compiling PDF..."):
-                pdf_path = compile_latex(cv_data, "user_photo.jpg")
-
-            # 5. Show Download
-            if pdf_path and os.path.exists(pdf_path):
-                with open(pdf_path, "rb") as f:
-                    st.download_button(
-                        label="Download Formatted CV",
-                        data=f,
-                        file_name="Formatted_CV.pdf",
-                        mime="application/pdf"
-                    )
-                
-                # Preview
-                st.subheader("Preview")
-                st.image(photo_path, width=100)
-                st.json(cv_data)
+        # 4. Compile
+        pdf_path = compile_latex(cv_data, photo_name)
+        
+        if pdf_path:
+            with open(pdf_path, "rb") as f:
+                st.download_button("Download PDF", f, "cv.pdf", "application/pdf")
